@@ -925,7 +925,10 @@ void GSTextureCache::InvalidateLocalMem(GSOffset* off, const GSVector4i& r)
 	if (psm == PSM_PSMZ32 || psm == PSM_PSMZ24 || psm == PSM_PSMZ16 || psm == PSM_PSMZ16S) {
 		GL_INS("ERROR: InvalidateLocalMem depth format isn't supported (%d,%d to %d,%d)", r.x, r.y, r.z, r.w);
 		if (m_can_convert_depth) {
-			for(auto t : m_dst[DepthStencil]) {
+			auto& dss = m_dst[DepthStencil];
+			for (auto it = dss.rbegin(); it != dss.rend(); ++it)  // Iterate targets from LRU to MRU.
+			{
+				Target* t = *it;
 				if(GSUtil::HasSharedBits(bp, psm, t->m_TEX0.TBP0, t->m_TEX0.PSM)) {
 					if (GSUtil::HasCompatibleBits(psm, t->m_TEX0.PSM))
 						Read(t, r.rintersect(t->m_valid));
@@ -939,8 +942,10 @@ void GSTextureCache::InvalidateLocalMem(GSOffset* off, const GSVector4i& r)
 	// It works for all the games mentioned below and fixes a couple of other ones as well
 	// (Busen0: Wizardry and Chaos Legion).
 	// Also in a few games the below code ran the Grandia3 case when it shouldn't :p
-	for(auto t : m_dst[RenderTarget])
+	auto& rts = m_dst[RenderTarget];
+	for (auto it = rts.rbegin(); it != rts.rend(); ++it)  // Iterate targets from LRU to MRU.
 	{
+		Target* t = *it;
 		if (t->m_TEX0.PSM != PSM_PSMZ32 && t->m_TEX0.PSM != PSM_PSMZ24 && t->m_TEX0.PSM != PSM_PSMZ16 && t->m_TEX0.PSM != PSM_PSMZ16S)
 		{
 			if(GSUtil::HasSharedBits(bp, psm, t->m_TEX0.TBP0, t->m_TEX0.PSM))
