@@ -37,7 +37,6 @@ GSTextureCache::GSTextureCache(GSRenderer* r)
 		m_disable_partial_invalidation = theApp.GetConfigB("UserHacks_DisablePartialInvalidation");
 		m_can_convert_depth            = !theApp.GetConfigB("UserHacks_DisableDepthSupport");
 		m_cpu_fb_conversion            = theApp.GetConfigB("UserHacks_CPU_FB_Conversion");
-		m_texture_inside_rt            = theApp.GetConfigB("UserHacks_TextureInsideRt");
 		m_wrap_gs_mem                  = theApp.GetConfigB("wrap_gs_mem");
 	} else {
 		UserHacks_HalfPixelOffset      = false;
@@ -264,8 +263,6 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const GIFRegTEX0& TEX0, con
 		// (Simply not doing this code at all makes a lot of previsouly missing stuff show (but breaks pretty much everything
 		// else.)
 
-		bool texture_inside_rt = ShallSearchTextureInsideRt();
-
 		bool found_t = false;
 		for(auto t : m_dst[RenderTarget])
 		{
@@ -306,7 +303,7 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const GIFRegTEX0& TEX0, con
 					found_t = true;
 					break;
 
-				} else if (texture_inside_rt && bw == t->m_TEX0.TBW && psm == PSM_PSMCT32 && t->m_TEX0.PSM == psm && t->m_TEX0.TBP0 < bp && t->m_end_block >= bp) {
+				} else if (bw == t->m_TEX0.TBW && psm == PSM_PSMCT32 && t->m_TEX0.PSM == psm && t->m_TEX0.TBP0 < bp && t->m_end_block >= bp) {
 					// BW equality needed because CreateSource does not handle BW conversion.
 					// Only PSMCT32 to limit false hits.
 					// PSM equality needed because CreateSource does not handle PSM conversion.
@@ -423,11 +420,6 @@ void GSTextureCache::ScaleTexture(GSTexture* texture)
 	}
 
 	texture->SetScale(scale_factor);
-}
-
-bool GSTextureCache::ShallSearchTextureInsideRt()
-{
-	return m_texture_inside_rt || (m_renderer->m_game.flags & CRC::Flags::TextureInsideRt);
 }
 
 GSTextureCache::Target* GSTextureCache::LookupTarget(const GIFRegTEX0& TEX0, int w, int h, int type, bool used, uint32 fbmask)
