@@ -868,6 +868,37 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 
 			// GH: Try to detect texture write that will overlap with a target buffer
 			if(GSUtil::HasSharedBits(psm, t->m_TEX0.PSM)) {
+				if (m_renderer->m_game.title == CRC::Jak2 ||
+					m_renderer->m_game.title == CRC::Jak3 ||
+					m_renderer->m_game.title == CRC::JakX)
+				{
+					// Detect generic overlapping with framebuffer.
+					// Some games do not like to have the Target(s) made dirty so aggresively, hence the branch.
+					// Fixes Jak 2/3 striped and shimmering textures.
+					// Fixes Jak X wheels rendering.
+
+					const SurfaceOffset so = ComputeSurfaceOffset(off, r, t);
+					if (so.is_valid)
+					{
+						// Offset from Target to Source in Target coords.
+						t->m_dirty.push_back(GSDirtyRect(so.b2a_offset, psm));
+						t->m_TEX0.TBW = bw;
+						GL_CACHE("TC: Dirty in the middle [aggressive] of Target(%s) %d (0x%x->0x%x) pos(%d,%d => %d,%d) bw:%u",
+							to_string(type),
+							t->m_texture ? t->m_texture->GetID() : 0,
+							t->m_TEX0.TBP0,
+							t->m_end_block,
+							so.b2a_offset.x,
+							so.b2a_offset.y,
+							so.b2a_offset.z,
+							so.b2a_offset.w,
+							bw
+						);
+						continue;
+					}
+					// Proceed with legacy code.
+				}
+
 				if (bp < t->m_TEX0.TBP0)
 				{
 					uint32 rowsize = bw * 8192;
