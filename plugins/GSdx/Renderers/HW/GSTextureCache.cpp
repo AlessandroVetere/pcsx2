@@ -955,6 +955,14 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 // Called each time you want to read from the GS memory
 void GSTextureCache::InvalidateLocalMem(GSOffset* off, const GSVector4i& r)
 {
+	GL_CACHE("TC: InvalidateLocalMem off(0x%x, %u, %s) r(%d, %d => %d, %d)",
+		off->bp,
+		off->bw,
+		psm_str(off->psm),
+		r.x,
+		r.y,
+		r.z,
+		r.w);
 	uint32 bp = off->bp;
 	uint32 psm = off->psm;
 	//uint32 bw = off->bw;
