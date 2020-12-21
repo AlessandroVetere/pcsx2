@@ -268,7 +268,7 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const GIFRegTEX0& TEX0, con
 		bool found_t = false;
 		for(auto t : m_dst[RenderTarget])
 		{
-			if(t->m_used && t->m_dirty.empty())
+			if(t->m_used)  // && t->m_dirty.empty())
 			{
 				// Typical bug (MGS3 blue cloud):
 				// 1/ RT used as 32 bits => alpha channel written
@@ -840,7 +840,7 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 								t->m_texture ? t->m_texture->GetID() : 0,
 								t->m_TEX0.TBP0, r.x, r.y, r.z, r.w);
 					t->m_dirty.push_back(GSDirtyRect(r, psm));
-					t->m_TEX0.TBW = bw;
+					// t->m_TEX0.TBW = bw;
 				}
 				else
 				{
