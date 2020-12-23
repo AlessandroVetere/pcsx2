@@ -270,7 +270,8 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const GIFRegTEX0& TEX0, con
 		bool found_t = false;
 		for(auto t : m_dst[RenderTarget])
 		{
-			if(t->m_used && t->m_dirty.empty())
+			const bool t_clean = t->m_dirty.empty();
+			if(t->m_used)
 			{
 				// Typical bug (MGS3 blue cloud):
 				// 1/ RT used as 32 bits => alpha channel written
@@ -281,7 +282,7 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const GIFRegTEX0& TEX0, con
 				// Solution: consider the RT as 32 bits if the alpha was used in the past
 				uint32 t_psm = (t->m_dirty_alpha) ? t->m_TEX0.PSM & ~0x1 : t->m_TEX0.PSM;
 
-				if (GSUtil::HasSharedBits(bp, psm, t->m_TEX0.TBP0, t_psm))
+				if (t_clean && GSUtil::HasSharedBits(bp, psm, t->m_TEX0.TBP0, t_psm))
 				{
 					// It is a complex to convert the code in shader. As a reference, let's do it on the CPU, it will be slow but
 					// 1/ it just works :)
@@ -298,7 +299,9 @@ GSTextureCache::Source* GSTextureCache::LookupSource(const GIFRegTEX0& TEX0, con
 					found_t = true;
 					break;
 
-				} else if ((t->m_TEX0.TBW >= 16) && GSUtil::HasSharedBits(bp, psm, t->m_TEX0.TBP0 + t->m_TEX0.TBW * 0x10, t->m_TEX0.PSM)) {
+				}
+				else if (t_clean && (t->m_TEX0.TBW >= 16) && GSUtil::HasSharedBits(bp, psm, t->m_TEX0.TBP0 + t->m_TEX0.TBW * 0x10, t->m_TEX0.PSM))
+				{
 					// Detect half of the render target (fix snow engine game)
 					// Target Page (8KB) have always a width of 64 pixels
 					// Half of the Target is TBW/2 pages * 8KB / (1 block * 256B) = 0x10
@@ -845,7 +848,6 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 					GL_CACHE("TC: Dirty Target(%s) %d (0x%x) r(%d,%d,%d,%d)", to_string(type),
 								t->m_texture ? t->m_texture->GetID() : 0,
 								t->m_TEX0.TBP0, r.x, r.y, r.z, r.w);
-					t->m_TEX0.TBW = bw;
 					t->m_dirty.push_back(GSDirtyRect(r, psm, bw));
 				}
 				else
@@ -880,7 +882,6 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 					if (so.is_valid)
 					{
 						// Offset from Target to Source in Target coords.
-						t->m_TEX0.TBW = bw;
 						t->m_dirty.push_back(GSDirtyRect(so.b2a_offset, psm, bw));
 						GL_CACHE("TC: Dirty in the middle [aggressive] of Target(%s) %d (0x%x->0x%x) pos(%d,%d => %d,%d) bw:%u",
 							to_string(type),
@@ -913,7 +914,6 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 									t->m_texture ? t->m_texture->GetID() : 0,
 									t->m_TEX0.TBP0);
 							// TODO: do not add this rect above too
-							t->m_TEX0.TBW = bw;
 							t->m_dirty.push_back(GSDirtyRect(GSVector4i(r.left, r.top - y, r.right, r.bottom - y), psm, bw));
 							continue;
 						}
@@ -939,7 +939,6 @@ void GSTextureCache::InvalidateVideoMem(GSOffset* off, const GSVector4i& rect, b
 								t->m_TEX0.TBP0, t->m_end_block,
 								r.left, r.top + y, r.right, r.bottom + y, bw);
 
-						t->m_TEX0.TBW = bw;
 						t->m_dirty.push_back(GSDirtyRect(GSVector4i(r.left, r.top + y, r.right, r.bottom + y), psm, bw));
 						continue;
 					}
@@ -2117,6 +2116,26 @@ GSTextureCache::SurfaceOffset GSTextureCache::ComputeSurfaceOffset(const uint32_
 	sok.elems[1].psm = t->m_TEX0.PSM;
 	sok.elems[1].rect = t->m_valid;
 	const SurfaceOffset so = ComputeSurfaceOffset(sok);
+	// Check if any dirty rect in the target overlaps with the offset.
+	if (so.is_valid && !t->m_dirty.empty())
+	{
+		const SurfaceOffsetKeyElem& t_sok = sok.elems[1];
+		const GSLocalMemory::psm_t& t_psm_s = GSLocalMemory::m_psm[t_sok.psm];
+		const uint32 so_bp = t_psm_s.bn(so.b2a_offset.x, so.b2a_offset.y, t_sok.bp, t_sok.bw);
+		const uint32 so_bp_end = t_psm_s.bn(so.b2a_offset.z - 1, so.b2a_offset.w - 1, t_sok.bp, t_sok.bw);
+		for (const auto& dr : t->m_dirty)
+		{
+			const GSLocalMemory::psm_t& dr_psm_s = GSLocalMemory::m_psm[dr.psm];
+			const uint32 dr_bp = dr_psm_s.bn(dr.r.x, dr.r.y, t_sok.bp, dr.bw);
+			const uint32 dr_bp_end = dr_psm_s.bn(dr.r.z - 1, dr.r.w - 1, t_sok.bp, dr.bw);
+			const bool overlap = GSTextureCache::CheckOverlap(dr_bp, dr_bp_end, so_bp, so_bp_end);
+			if (overlap)
+			{
+				// Dirty rectangle in target overlaps with the found offset.
+				return { false };
+			}
+		}
+	}
 	return so;
 }
 
