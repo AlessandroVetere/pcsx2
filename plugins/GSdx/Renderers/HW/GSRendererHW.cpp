@@ -281,6 +281,10 @@ void GSRendererHW::VSync(int field)
 	{
 		m_tc->RemoveAll();
 
+		// Reset RT size.
+		m_width = !m_upscale_multiplier ? m_custom_width : default_rt_size.x;
+		m_height = !m_upscale_multiplier ? m_custom_height : default_rt_size.y;
+
 		m_reset = false;
 	}
 
