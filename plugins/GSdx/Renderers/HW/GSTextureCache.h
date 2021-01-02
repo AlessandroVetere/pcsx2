@@ -32,6 +32,8 @@ class GSTextureCache
 public:
 	enum {RenderTarget, DepthStencil};
 
+	constexpr static uint32 MAX_BP = 0x3fff;
+
 	constexpr static bool CheckOverlap(const uint32 a_bp, const uint32 a_bp_end, const uint32 b_bp, const uint32 b_bp_end) noexcept
 	{
 		const bool valid = a_bp < a_bp_end && b_bp < b_bp_end;
