@@ -54,9 +54,10 @@ public:
 
 	enum {EOP = 0xffffffff};
 
-	uint32* GetPages(const GSVector4i& rect, uint32* pages = NULL, GSVector4i* bbox = NULL);
+	uint32* GetPages(const GSVector4i& rect, uint32* pages = NULL, GSVector4i* bbox = NULL) const;
 	void* GetPagesAsBits(const GSVector4i& rect, void* pages);
 	uint32* GetPagesAsBits(const GIFRegTEX0& TEX0);
+	GSVector4i GetRect(uint32 page) const noexcept;
 };
 
 struct GSPixelOffset

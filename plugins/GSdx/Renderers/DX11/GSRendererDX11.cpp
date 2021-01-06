@@ -295,9 +295,10 @@ void GSRendererDX11::EmulateChannelShuffle(GSTexture** rt, const GSTextureCache:
 	GSDevice11* dev = (GSDevice11*)m_dev;
 
 	// Uncomment to disable HLE emulation (allow to trace the draw call)
-	// m_channel_shuffle = false;
+	m_channel_shuffle = false;
 
 	// First let's check we really have a channel shuffle effect
+#if 0
 	if (m_channel_shuffle)
 	{
 		if (m_game.title == CRC::GT4 || m_game.title == CRC::GT3 || m_game.title == CRC::GTConcept || m_game.title == CRC::TouristTrophy)
@@ -305,7 +306,7 @@ void GSRendererDX11::EmulateChannelShuffle(GSTexture** rt, const GSTextureCache:
 			// fprintf(stderr, "%d: Gran Turismo RGB Channel\n", s_n);
 			m_ps_sel.channel = ChannelFetch_RGB;
 			m_context->TEX0.TFX = TFX_DECAL;
-			*rt = tex->m_from_target;
+			// *rt = tex->m_from_target;
 		}
 		else if (m_game.title == CRC::Tekken5)
 		{
@@ -318,7 +319,7 @@ void GSRendererDX11::EmulateChannelShuffle(GSTexture** rt, const GSTextureCache:
 				// 12 pages: 2 calls by channel, 3 channels, 1 blit
 				// Minus current draw call
 				m_skip = 12 * (3 + 3 + 1) - 1;
-				*rt = tex->m_from_target;
+				// *rt = tex->m_from_target;
 			}
 			else
 			{
@@ -425,7 +426,7 @@ void GSRendererDX11::EmulateChannelShuffle(GSTexture** rt, const GSTextureCache:
 	// Effect is really a channel shuffle effect so let's cheat a little
 	if (m_channel_shuffle)
 	{
-		dev->PSSetShaderResource(4, tex->m_from_target);
+		// dev->PSSetShaderResource(4, tex->m_from_target);
 		// Replace current draw with a fullscreen sprite
 		//
 		// Performance GPU note: it could be wise to reduce the size to
@@ -446,6 +447,7 @@ void GSRendererDX11::EmulateChannelShuffle(GSTexture** rt, const GSTextureCache:
 		dev->PSSetShaderResource(4, NULL);
 #endif
 	}
+#endif
 }
 
 void GSRendererDX11::EmulateBlending()
@@ -602,7 +604,7 @@ void GSRendererDX11::EmulateTextureSampler(const GSTextureCache::Source* tex)
 		// Force a 32 bits access (normally shuffle is done on 16 bits)
 		// m_ps_sel.fmt = 0; // removed as an optimization
 		m_ps_sel.aem = m_env.TEXA.AEM;
-		ASSERT(tex->m_target);
+		// ASSERT(tex->m_target);
 
 		// Require a float conversion if the texure is a depth otherwise uses Integral scaling
 		if (psm.depth)
@@ -621,7 +623,7 @@ void GSRendererDX11::EmulateTextureSampler(const GSTextureCache::Source* tex)
 		vs_cb.Texture_Scale_Offset.w = half_offset.y;
 
 	}
-	else if (tex->m_target)
+	else if (false /*tex->m_target*/)
 	{
 		// Use an old target. AEM and index aren't resolved it must be done
 		// on the GPU
@@ -741,7 +743,7 @@ void GSRendererDX11::EmulateTextureSampler(const GSTextureCache::Source* tex)
 		ps_cb.WH.y = (float)(1 << m_context->stack.TEX0.TH);
 
 		// We can't handle m_target with invalid_tex0 atm due to upscaling
-		ASSERT(!tex->m_target);
+		// ASSERT(!tex->m_target);
 	}
 
 	// Only enable clamping in CLAMP mode. REGION_CLAMP will be done manually in the shader

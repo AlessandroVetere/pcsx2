@@ -1795,6 +1795,11 @@ void GSState::Write(const uint8* mem, int len)
 		r.right = r.left + m_env.TRXREG.RRW;
 		r.bottom = r.top + m_env.TRXREG.RRH;
 
+		GIFRegBITBLTBUF blit_local;
+		blit_local.SBP = blit.DBP;
+		blit_local.SBW = blit.DBW;
+		blit_local.SPSM = blit.DPSM;
+		InvalidateLocalMem(blit_local, r);  // Readback before writing.
 		InvalidateVideoMem(blit, r);
 
 		(m_mem.*psm.wi)(m_tr.x, m_tr.y, mem, m_tr.total, blit, m_env.TRXPOS, m_env.TRXREG);

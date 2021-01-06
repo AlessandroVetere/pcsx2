@@ -505,6 +505,12 @@ GSLocalMemory::~GSLocalMemory()
 
 GSOffset* GSLocalMemory::GetOffset(uint32 bp, uint32 bw, uint32 psm)
 {
+	ASSERT(bp < 0x4000);
+	// ASSERT(bw > 0);
+	ASSERT(psm < 64);
+	if (bw == 0)
+		return nullptr;
+
 	uint32 hash = bp | (bw << 14) | (psm << 20);
 
 	auto i = m_omap.find(hash);
@@ -515,7 +521,7 @@ GSOffset* GSLocalMemory::GetOffset(uint32 bp, uint32 bw, uint32 psm)
 	}
 
 	GSOffset* off = new GSOffset(bp, bw, psm);
-
+	off->hash = hash;
 	m_omap[hash] = off;
 
 	return off;
@@ -2047,8 +2053,6 @@ void GSLocalMemory::SaveBMP(const std::string& fn, uint32 bp, uint32 bw, uint32 
 
 GSOffset::GSOffset(uint32 _bp, uint32 _bw, uint32 _psm)
 {
-	hash = _bp | (_bw << 14) | (_psm << 20);
-
 	GSLocalMemory::pixelAddress bn = GSLocalMemory::m_psm[_psm].bn;
 
 	for(int i = 0; i < 256; i++)
@@ -2079,9 +2083,10 @@ GSOffset::~GSOffset()
 		_aligned_free(buffer);
 }
 
-uint32* GSOffset::GetPages(const GSVector4i& rect, uint32* pages, GSVector4i* bbox)
+uint32* GSOffset::GetPages(const GSVector4i& rect, uint32* pages, GSVector4i* bbox) const
 {
-	GSVector2i bs = (bp & 31) == 0 ? GSLocalMemory::m_psm[psm].pgs : GSLocalMemory::m_psm[psm].bs;
+	const GSLocalMemory::psm_t psm_t = GSLocalMemory::m_psm[psm];
+	GSVector2i bs = (bp & 31) == 0 ? psm_t.pgs : psm_t.bs;
 
 	GSVector4i r = rect.ralign<Align_Outside>(bs);
 
@@ -2091,7 +2096,7 @@ uint32* GSOffset::GetPages(const GSVector4i& rect, uint32* pages, GSVector4i* bb
 	// bp page-aligned: (w * h) / (64 * 32)
 	// bp block-aligned: (w * h) / (8 * 8)
 
-	int size = r.width() * r.height();
+	const int size = r.width() * r.height();
 
 	int limit = MAX_PAGES + 1;
 
@@ -2102,36 +2107,54 @@ uint32* GSOffset::GetPages(const GSVector4i& rect, uint32* pages, GSVector4i* bb
 		pages = new uint32[limit];
 	}
 
-	alignas(16) uint32 tmp[16];
-
-	((GSVector4i*)tmp)[0] = GSVector4i::zero();
-	((GSVector4i*)tmp)[1] = GSVector4i::zero();
-	((GSVector4i*)tmp)[2] = GSVector4i::zero();
-	((GSVector4i*)tmp)[3] = GSVector4i::zero();
-
-	r = r.sra32(3);
-
-	bs.x >>= 3;
-	bs.y >>= 3;
-
 	uint32* RESTRICT p = pages;
 
-	for(int y = r.top; y < r.bottom; y += bs.y)
+	if (r.width() > 2048 || r.height() > 2048)
 	{
-		uint32 base = block.row[y];
-
-		for(int x = r.left; x < r.right; x += bs.x)
+		for (int y = r.top; y < r.bottom; y += bs.y)
 		{
-			uint32 n = ((base + block.col[x]) >> 5) % MAX_PAGES;
-
-			uint32& row = tmp[n >> 5];
-			uint32 col = 1 << (n & 31);
-
-			if((row & col) == 0)
+			for (int x = r.left; x < r.right; x += bs.x)
 			{
-				row |= col;
+				const uint32 page = (psm_t.bn(x, y, bp, bw) >> 5) % MAX_PAGES;
+				*p++ = page;
+				if (p - pages == MAX_PAGES)
+					break;
+			}
+			if (p - pages == MAX_PAGES)
+				break;
+		}
+	}
+	else
+	{
+		alignas(16) uint32 tmp[16];
 
-				*p++ = n;
+		((GSVector4i*)tmp)[0] = GSVector4i::zero();
+		((GSVector4i*)tmp)[1] = GSVector4i::zero();
+		((GSVector4i*)tmp)[2] = GSVector4i::zero();
+		((GSVector4i*)tmp)[3] = GSVector4i::zero();
+
+		r = r.sra32(3);
+
+		bs.x >>= 3;
+		bs.y >>= 3;
+
+		for (int y = r.top; y < r.bottom; y += bs.y)
+		{
+			uint32 base = block.row[y];
+
+			for (int x = r.left; x < r.right; x += bs.x)
+			{
+				uint32 n = ((base + block.col[x]) >> 5) % MAX_PAGES;
+
+				uint32& row = tmp[n >> 5];
+				uint32 col = 1 << (n & 31);
+
+				if ((row & col) == 0)
+				{
+					row |= col;
+
+					*p++ = n;
+				}
 			}
 		}
 	}
@@ -2165,6 +2188,27 @@ uint32* GSOffset::GetPagesAsBits(const GIFRegTEX0& TEX0)
 	return pages;
 }
 
+GSVector4i GSOffset::GetRect(uint32 page) const noexcept
+{
+	ASSERT(page < MAX_PAGES);
+	ASSERT(bw > 0);
+	ASSERT(psm < 64);
+	const uint32 page0 = bp >> 5;
+	ASSERT(page0 < MAX_PAGES);
+	const uint32 p = ((int)page - (int)page0) % MAX_PAGES;
+	const GSVector2i s = GSLocalMemory::m_psm[psm].pgs;
+	const uint32 row = p / bw;
+	const uint32 col = p - row * bw;
+	const uint32 x0 = col * s.x;
+	const uint32 y0 = row * s.y;
+	const uint32 x1 = x0 + s.x;
+	const uint32 y1 = y0 + s.y;
+	const GSVector4i r = GSVector4i(x0, y0, x1, y1);
+	const GSVector4i ro = r.ralign<Align_Outside>(s);
+	assert(r.eq(ro));
+	return r;
+}
+
 
 void* GSOffset::GetPagesAsBits(const GSVector4i& rect, void* pages)
 {
@@ -2175,24 +2219,42 @@ void* GSOffset::GetPagesAsBits(const GSVector4i& rect, void* pages)
 	((GSVector4i*)pages)[2] = GSVector4i::zero();
 	((GSVector4i*)pages)[3] = GSVector4i::zero();
 
-	GSVector2i bs = (bp & 31) == 0 ? GSLocalMemory::m_psm[psm].pgs : GSLocalMemory::m_psm[psm].bs;
+	const GSLocalMemory::psm_t psm_t = GSLocalMemory::m_psm[psm];
+
+	GSVector2i bs = (bp & 31) == 0 ? psm_t.pgs : psm_t.bs;
 
 	GSVector4i r = rect.ralign<Align_Outside>(bs);
 
-	r = r.sra32(3);
-
-	bs.x >>= 3;
-	bs.y >>= 3;
-
-	for(int y = r.top; y < r.bottom; y += bs.y)
+	if (r.width() > 2048 || r.height() > 2048)
 	{
-		uint32 base = block.row[y];
-
-		for(int x = r.left; x < r.right; x += bs.x)
+		for (int y = r.top; y < r.bottom; y += bs.y)
 		{
-			uint32 n = ((base + block.col[x]) >> 5) % MAX_PAGES;
+			for (int x = r.left; x < r.right; x += bs.x)
+			{
+				const uint32 page = (psm_t.bn(x, y, bp, bw) >> 5) % MAX_PAGES;
+				((uint32*)pages)[page >> 5] |= 1 << (page & 31);
+				ASSERT(page < MAX_PAGES);
+			}
+		}
+	}
+	else
+	{
+		r = r.sra32(3);
 
-			((uint32*)pages)[n >> 5] |= 1 << (n & 31);
+		bs.x >>= 3;
+		bs.y >>= 3;
+
+		for (int y = r.top; y < r.bottom; y += bs.y)
+		{
+			uint32 base = block.row[y];
+
+			for (int x = r.left; x < r.right; x += bs.x)
+			{
+				uint32 n = ((base + block.col[x]) >> 5) % MAX_PAGES;
+
+				((uint32*)pages)[n >> 5] |= 1 << (n & 31);
+				ASSERT(n < MAX_PAGES);
+			}
 		}
 	}
 

@@ -31,8 +31,9 @@ GSTextureCache11::GSTextureCache11(GSRenderer* r)
 
 void GSTextureCache11::Read(Target* t, const GSVector4i& r)
 {
-	if (!t->m_dirty.empty() || r.width() == 0 || r.height() == 0)
+	if (r.width() == 0 || r.height() == 0)
 	{
+		ASSERT(false);
 		return;
 	}
 
@@ -67,6 +68,7 @@ void GSTextureCache11::Read(Target* t, const GSVector4i& r)
 			break;
 
 		default:
+			ASSERT(false);
 			return;
 	}
 
@@ -85,7 +87,7 @@ void GSTextureCache11::Read(Target* t, const GSVector4i& r)
 		{
 			// TODO: block level write
 
-			GSOffset* off = m_renderer->m_mem.GetOffset(TEX0.TBP0, TEX0.TBW, TEX0.PSM);
+			GSOffset* off = t->m_off;
 
 			switch (TEX0.PSM)
 			{

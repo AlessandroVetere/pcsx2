@@ -142,7 +142,7 @@ void GSRendererHW::SetScaling()
 	if ( m_upscale_multiplier <= 1 || good_rt_size)
 		return;
 
-	m_tc->RemovePartial();
+	m_tc->RemoveAll();
 	m_width = upscaled_fb_w;
 	m_height = upscaled_fb_h;
 	printf("Frame buffer size set to  %dx%d (%dx%d)\n", fb_width, fb_height , m_width, m_height);
@@ -178,7 +178,7 @@ void GSRendererHW::CustomResolutionScaling()
 	if (m_width >= m_custom_width && m_height >= framebuffer_height)
 		return;
 
-	m_tc->RemovePartial();
+	m_tc->RemoveAll();
 	m_width = std::max(m_width, default_rt_size.x);
 	m_height = std::max(framebuffer_height, default_rt_size.y);
 	printf("Frame buffer size set to  %dx%d (%dx%d)\n", scissored_buffer_size.x, scissored_buffer_size.y, m_width, m_height);
@@ -249,10 +249,12 @@ void GSRendererHW::SetGameCRC(uint32 crc, int options)
 
 bool GSRendererHW::CanUpscale()
 {
+#if 0
 	if(m_hacks.m_cu && !(this->*m_hacks.m_cu)())
 	{
 		return false;
 	}
+#endif
 
 	return m_upscale_multiplier!=1 && m_regs->PMODE.EN != 0; // upscale ratio depends on the display size, with no output it may not be set correctly (ps2 logo to game transition)
 }
@@ -291,8 +293,6 @@ void GSRendererHW::VSync(int field)
 
 	GSRenderer::VSync(field);
 
-	m_tc->IncAge();
-
 	m_tc->PrintMemoryUsage();
 	m_dev->PrintMemoryUsage();
 
@@ -317,11 +317,17 @@ GSTexture* GSRendererHW::GetOutput(int i, int& y_offset)
 	TEX0.TBW = DISPFB.FBW;
 	TEX0.PSM = DISPFB.PSM;
 
+	ASSERT(TEX0.TBW > 0);
+	const GSVector4i r = GetFrameRect(i);
+	TEX0.TW = std::ceil(std::max<double>(2, std::log2(r.z)));
+	TEX0.TH = std::ceil(std::max<double>(2, std::log2(r.w)));
+
 	// TRACE(_T("[%d] GetOutput %d %05x (%d)\n"), (int)m_perfmon.GetFrame(), i, (int)TEX0.TBP0, (int)TEX0.PSM);
 
-	GSTexture* t = NULL;
+	GSTexture* t = nullptr;
+	y_offset = 0;
 
-	if(GSTextureCache::Target* rt = m_tc->LookupTarget(TEX0, m_width, m_height, GetFramebufferHeight()))
+	if (GSTextureCache::Target* rt = m_tc->LookupTarget(TEX0, GSTextureCache::SurfaceType::RenderTarget))
 	{
 		t = rt->m_texture;
 
@@ -349,13 +355,18 @@ GSTexture* GSRendererHW::GetOutput(int i, int& y_offset)
 
 GSTexture* GSRendererHW::GetFeedbackOutput()
 {
+#if 0
 	GIFRegTEX0 TEX0;
 
 	TEX0.TBP0 = m_regs->EXTBUF.EXBP;
 	TEX0.TBW = m_regs->EXTBUF.EXBW;
 	TEX0.PSM = m_regs->DISP[m_regs->EXTBUF.FBIN & 1].DISPFB.PSM;
 
-	GSTextureCache::Target* rt = m_tc->LookupTarget(TEX0, m_width, m_height, /*GetFrameRect(i).bottom*/0);
+	// TODO Compute.
+	TEX0.TW = std::ceil(std::log2(1024));
+	TEX0.TH = std::ceil(std::log2(1024));
+
+	GSTextureCache::Target* rt = m_tc->LookupTarget(TEX0, GSTextureCache::SurfaceType::RenderTarget);
 
 	GSTexture* t = rt->m_texture;
 
@@ -365,6 +376,18 @@ GSTexture* GSRendererHW::GetFeedbackOutput()
 #endif
 
 	return t;
+#endif
+	// From GSRendererSW::GetFeedbackOutput().
+
+	int dummy;
+
+	// It is enough to emulate Xenosaga cutscene. (or any game that will do a basic loopback)
+	for (int i = 0; i < 2; i++) {
+		if (m_regs->EXTBUF.EXBP == m_regs->DISP[i].DISPFB.Block())
+			return GetOutput(i, dummy);
+	}
+
+	return nullptr;
 }
 
 void GSRendererHW::Lines2Sprites()
@@ -535,7 +558,7 @@ void GSRendererHW::ConvertSpriteTextureShuffle(bool& write_ba, bool& read_ba)
 			//
 			// 32bits emulation means we can do the effect once but double the size.
 			// Test cases: Crash Twinsantiy and DBZ BT3
-			const int height_delta = m_src->m_valid_rect.height() - m_r.height();
+			const int height_delta = m_src->m_rect.height() - m_r.height();
 			// Test Case: NFS: HP2 splits the effect h:256 and h:192 so 64
 			half_bottom = abs(height_delta) <= 64;
 			break;
@@ -692,7 +715,7 @@ GSVector4i GSRendererHW::ComputeBoundingBox(const GSVector2& rtscale, const GSVe
 void GSRendererHW::MergeSprite(GSTextureCache::Source* tex)
 {
 	// Upscaling hack to avoid various line/grid issues
-	if (m_userHacks_merge_sprite && tex && tex->m_target && (m_vt.m_primclass == GS_SPRITE_CLASS)) {
+	if (m_userHacks_merge_sprite && tex && (m_vt.m_primclass == GS_SPRITE_CLASS)) {
 		if (PRIM->FST && GSLocalMemory::m_psm[tex->m_TEX0.PSM].fmt < 2 && ((m_vt.m_eq.value & 0xCFFFF) == 0xCFFFF)) {
 
 			// Ideally the hack ought to be enabled in a true paving mode only. I don't know how to do it accurately
@@ -745,14 +768,12 @@ void GSRendererHW::InvalidateVideoMem(const GIFRegBITBLTBUF& BITBLTBUF, const GS
 {
 	// printf("[%d] InvalidateVideoMem %d,%d - %d,%d %05x (%d)\n", (int)m_perfmon.GetFrame(), r.left, r.top, r.right, r.bottom, (int)BITBLTBUF.DBP, (int)BITBLTBUF.DPSM);
 
-	m_tc->InvalidateVideoMem(m_mem.GetOffset(BITBLTBUF.DBP, BITBLTBUF.DBW, BITBLTBUF.DPSM), r);
+	m_tc->InvalidateVideoMem(m_mem.GetOffset(BITBLTBUF.DBP, BITBLTBUF.DBW, BITBLTBUF.DPSM), r, nullptr);
 }
 
 void GSRendererHW::InvalidateLocalMem(const GIFRegBITBLTBUF& BITBLTBUF, const GSVector4i& r, bool clut)
 {
 	// printf("[%d] InvalidateLocalMem %d,%d - %d,%d %05x (%d)\n", (int)m_perfmon.GetFrame(), r.left, r.top, r.right, r.bottom, (int)BITBLTBUF.SBP, (int)BITBLTBUF.SPSM);
-
-	if(clut) return; // FIXME
 
 	m_tc->InvalidateLocalMem(m_mem.GetOffset(BITBLTBUF.SBP, BITBLTBUF.SBW, BITBLTBUF.SPSM), r);
 }
@@ -1145,6 +1166,13 @@ void GSRendererHW::Draw()
 	GSDrawingContext* context = m_context;
 	const GSLocalMemory::psm_t& tex_psm = GSLocalMemory::m_psm[m_context->TEX0.PSM];
 
+	// Fix TBW.
+	if (!context->TEX0.TBW)
+	{
+		GL_INS("ERROR INVALID TBW");
+		return;
+	}
+
 	// Fix TEX0 size
 	if(PRIM->TME && !IsMipMapActive())
 		m_context->ComputeFixedTEX0(m_vt.m_min.t.xyxy(m_vt.m_max.t));
@@ -1187,6 +1215,7 @@ void GSRendererHW::Draw()
 	const GSVector4 delta_p = m_vt.m_max.p - m_vt.m_min.p;
 	bool single_page = (delta_p.x <= 64.0f) && (delta_p.y <= 64.0f);
 
+#if 0
 	if (m_channel_shuffle) {
 		m_channel_shuffle = draw_sprite_tex && (m_context->TEX0.PSM == PSM_PSMT8) && single_page;
 		if (m_channel_shuffle) {
@@ -1205,6 +1234,10 @@ void GSRendererHW::Draw()
 	} else {
 		m_channel_shuffle = false;
 	}
+#endif
+
+	// The rectangle of the draw.
+	m_r = GSVector4i(m_vt.m_min.p.floor().xyxy(m_vt.m_max.p.ceil())).rintersect(GSVector4i(context->scissor.in));
 
 	GIFRegTEX0 TEX0;
 
@@ -1212,10 +1245,13 @@ void GSRendererHW::Draw()
 	TEX0.TBW = context->FRAME.FBW;
 	TEX0.PSM = context->FRAME.PSM;
 
+	TEX0.TW = std::ceil(std::max<double>(2, std::log2(m_r.z)));
+	TEX0.TH = std::ceil(std::max<double>(2, std::log2(m_r.w)));
+
 	GSTextureCache::Target* rt = NULL;
 	GSTexture* rt_tex = NULL;
 	if (!no_rt) {
-		rt = m_tc->LookupTarget(TEX0, m_width, m_height, GSTextureCache::RenderTarget, true, fm);
+		rt = m_tc->LookupTarget(TEX0, GSTextureCache::SurfaceType::RenderTarget);
 		rt_tex = rt->m_texture;
 	}
 
@@ -1226,7 +1262,7 @@ void GSRendererHW::Draw()
 	GSTextureCache::Target* ds = NULL;
 	GSTexture* ds_tex = NULL;
 	if (!no_ds) {
-		ds = m_tc->LookupTarget(TEX0, m_width, m_height, GSTextureCache::DepthStencil, context->DepthWrite());
+		ds = m_tc->LookupTarget(TEX0, GSTextureCache::SurfaceType::DepthStencil);
 		ds_tex = ds->m_texture;
 	}
 
@@ -1310,7 +1346,7 @@ void GSRendererHW::Draw()
 
 		GetTextureMinMax(r, TEX0, MIP_CLAMP, m_vt.IsLinear());
 
-		m_src = tex_psm.depth ? m_tc->LookupDepthSource(TEX0, env.TEXA, r) : m_tc->LookupSource(TEX0, env.TEXA, r);
+		m_src = m_tc->LookupSource(TEX0, env.TEXA, r);
 
 		// Round 2
 		if (IsMipMapActive() && m_mipmap == 2 && !tex_psm.depth) {
@@ -1333,19 +1369,20 @@ void GSRendererHW::Draw()
 
 				GetTextureMinMax(r, MIP_TEX0, MIP_CLAMP, m_vt.IsLinear());
 
-				m_src->UpdateLayer(MIP_TEX0, r, layer - m_lod.x);
+				m_tc->UpdateSurfaceLayer(m_src, MIP_TEX0, r, layer - m_lod.x);
 			}
 
 			m_vt.m_min.t = tmin;
 			m_vt.m_max.t = tmax;
 		}
 
+#if 0
 		// Hypothesis: texture shuffle is used as a postprocessing effect so texture will be an old target.
 		// Initially code also tested the RT but it gives too much false-positive
 		//
 		// Both input and output are 16 bits and texture was initially 32 bits!
 		m_texture_shuffle = (GSLocalMemory::m_psm[context->FRAME.PSM].bpp == 16) && (tex_psm.bpp == 16)
-			&& draw_sprite_tex && m_src->m_32_bits_fmt;
+			&& draw_sprite_tex && false;
 
 		// Okami mustn't call this code
 		if (m_texture_shuffle && m_vertex.next < 3 && PRIM->FST && (m_context->FRAME.FBMSK == 0)) {
@@ -1373,18 +1410,13 @@ void GSRendererHW::Draw()
 		// Texture shuffle is not yet supported with strange clamp mode
 		ASSERT(!m_texture_shuffle || (context->CLAMP.WMS < 3 && context->CLAMP.WMT < 3));
 
-		if (m_src->m_target && m_context->TEX0.PSM == PSM_PSMT8 && single_page && draw_sprite_tex) {
+		if (m_context->TEX0.PSM == PSM_PSMT8 && single_page && draw_sprite_tex) {
 			GL_INS("Channel shuffle effect detected (2nd shot)");
 			m_channel_shuffle = true;
 		} else {
 			m_channel_shuffle = false;
 		}
-	}
-	if (rt) {
-		// Be sure texture shuffle detection is properly propagated
-		// Otherwise set or clear the flag (Code in texture cache only set the flag)
-		// Note: it is important to clear the flag when RT is used as a real 16 bits target.
-		rt->m_32_bits_fmt = m_texture_shuffle || (GSLocalMemory::m_psm[context->FRAME.PSM].bpp != 16);
+#endif
 	}
 
 	if(s_dump)
@@ -1437,9 +1469,7 @@ void GSRendererHW::Draw()
 
 	}
 
-	// The rectangle of the draw
-	m_r = GSVector4i(m_vt.m_min.p.xyxy(m_vt.m_max.p)).rintersect(GSVector4i(context->scissor.in));
-
+#if 0
 	if(m_hacks.m_oi && !(this->*m_hacks.m_oi)(rt_tex, ds_tex, m_src))
 	{
 		GL_INS("Warning skipping a draw call (%d)", s_n);
@@ -1450,6 +1480,7 @@ void GSRendererHW::Draw()
 		GL_INS("Warning skipping a draw call (%d)", s_n);
 		return;
 	}
+
 
 	if (m_userhacks_enabled_gs_mem_clear) {
 		// Constant Direct Write without texture/test/blending (aka a GS mem clear)
@@ -1466,6 +1497,7 @@ void GSRendererHW::Draw()
 			OI_DoubleHalfClear(rt_tex, ds_tex);
 		}
 	}
+#endif
 
 	// A couple of hack to avoid upscaling issue. So far it seems to impacts mostly sprite
 	// Note: first hack corrects both position and texture coordinate
@@ -1530,32 +1562,26 @@ void GSRendererHW::Draw()
 	}
 #endif
 
+	// TODO Check that rt and ds do not overlap.
+
 	if(fm != 0xffffffff && rt)
 	{
-		//rt->m_valid = rt->m_valid.runion(r);
-		rt->UpdateValidity(m_r);
-
-		m_tc->InvalidateVideoMem(context->offset.fb, m_r, false);
-
-		m_tc->InvalidateVideoMemType(GSTextureCache::DepthStencil, context->FRAME.Block());
+		m_tc->InvalidateVideoMem(context->offset.fb, m_r, rt);
 	}
 
 	if(zm != 0xffffffff && ds)
 	{
-		//ds->m_valid = ds->m_valid.runion(r);
-		ds->UpdateValidity(m_r);
-
-		m_tc->InvalidateVideoMem(context->offset.zb, m_r, false);
-
-		m_tc->InvalidateVideoMemType(GSTextureCache::RenderTarget, context->ZBUF.Block());
+		m_tc->InvalidateVideoMem(context->offset.zb, m_r, ds);
 	}
 
 	//
 
+#if 0
 	if(m_hacks.m_oo)
 	{
 		(this->*m_hacks.m_oo)();
 	}
+#endif
 
 	if(s_dump)
 	{
@@ -1762,7 +1788,7 @@ void GSRendererHW::OI_GsMemClear()
 
 bool GSRendererHW::OI_BlitFMV(GSTextureCache::Target* _rt, GSTextureCache::Source* tex, const GSVector4i& r_draw)
 {
-	if (r_draw.w > 1024 && (m_vt.m_primclass == GS_SPRITE_CLASS) && (m_vertex.next == 2) && PRIM->TME && !PRIM->ABE && tex && !tex->m_target && m_context->TEX0.TBW > 0) {
+	if (r_draw.w > 1024 && (m_vt.m_primclass == GS_SPRITE_CLASS) && (m_vertex.next == 2) && PRIM->TME && !PRIM->ABE && tex && m_context->TEX0.TBW > 0) {
 		GL_PUSH("OI_BlitFMV");
 
 		GL_INS("OI_BlitFMV");
@@ -1814,7 +1840,7 @@ bool GSRendererHW::OI_BlitFMV(GSTextureCache::Target* _rt, GSTextureCache::Sourc
 		// reuploaded again later
 		m_tc->Read(tex, r_texture);
 
-		m_tc->InvalidateVideoMemSubTarget(_rt);
+		// TODO m_tc->InvalidateVideoMemSubTarget(_rt);
 
 		return false; // skip current draw
 	}
@@ -1859,9 +1885,6 @@ bool GSRendererHW::OI_BigMuthaTruckers(GSTexture* rt, GSTexture* ds, GSTextureCa
 
 bool GSRendererHW::OI_DBZBTGames(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* t)
 {
-	if (t && t->m_from_target)  // Avoid slow framebuffer readback
-		return true;
-
 	// Sprite rendering
 	if (!CanUseSwSpriteRender(true))
 		return true;
@@ -2013,7 +2036,10 @@ bool GSRendererHW::OI_RozenMaidenGebetGarden(GSTexture* rt, GSTexture* ds, GSTex
 			TEX0.TBW = m_context->FRAME.FBW;
 			TEX0.PSM = m_context->FRAME.PSM;
 
-			if(GSTextureCache::Target* tmp_rt = m_tc->LookupTarget(TEX0, m_width, m_height, GSTextureCache::RenderTarget, true))
+			TEX0.TW = std::ceil(std::max<double>(2, std::log2(m_r.z)));
+			TEX0.TH = std::ceil(std::max<double>(2, std::log2(m_r.w)));
+
+			if(GSTextureCache::Target* tmp_rt = m_tc->LookupTarget(TEX0, GSTextureCache::SurfaceType::RenderTarget))
 			{
 				GL_INS("OI_RozenMaidenGebetGarden FB clear");
 				tmp_rt->m_texture->Commit(); // Don't bother to save few MB for a single game
@@ -2032,7 +2058,10 @@ bool GSRendererHW::OI_RozenMaidenGebetGarden(GSTexture* rt, GSTexture* ds, GSTex
 			TEX0.TBW = m_context->FRAME.FBW;
 			TEX0.PSM = m_context->ZBUF.PSM;
 
-			if(GSTextureCache::Target* tmp_ds = m_tc->LookupTarget(TEX0, m_width, m_height, GSTextureCache::DepthStencil, true))
+			TEX0.TW = std::ceil(std::max<double>(2, std::log2(m_r.z)));
+			TEX0.TH = std::ceil(std::max<double>(2, std::log2(m_r.w)));
+
+			if(GSTextureCache::Target* tmp_ds = m_tc->LookupTarget(TEX0, GSTextureCache::SurfaceType::DepthStencil))
 			{
 				GL_INS("OI_RozenMaidenGebetGarden ZB clear");
 				tmp_ds->m_texture->Commit(); // Don't bother to save few MB for a single game
@@ -2058,7 +2087,6 @@ bool GSRendererHW::OI_SonicUnleashed(GSTexture* rt, GSTexture* ds, GSTextureCach
 
 	GIFRegTEX0 Frame;
 	Frame.TBW = m_context->FRAME.FBW;
-	Frame.TBP0 = m_context->FRAME.FBP;
 	Frame.TBP0 = m_context->FRAME.Block();
 	Frame.PSM = m_context->FRAME.PSM;
 
@@ -2070,7 +2098,10 @@ bool GSRendererHW::OI_SonicUnleashed(GSTexture* rt, GSTexture* ds, GSTextureCach
 
 	GL_INS("OI_SonicUnleashed replace draw by a copy");
 
-	GSTextureCache::Target* src = m_tc->LookupTarget(Texture, m_width, m_height, GSTextureCache::RenderTarget, true);
+	Texture.TW = std::ceil(std::max<double>(2, std::log2(m_r.z)));
+	Texture.TH = std::ceil(std::max<double>(2, std::log2(m_r.w)));
+
+	GSTextureCache::Target* src = m_tc->LookupTarget(Texture, GSTextureCache::SurfaceType::RenderTarget);
 
 	GSVector2i size = rt->GetSize();
 
@@ -2163,7 +2194,7 @@ bool GSRendererHW::OI_SuperManReturns(GSTexture* rt, GSTexture* ds, GSTextureCac
 		rt->Commit(); // Don't bother to save few MB for a single game
 	m_dev->ClearRenderTarget(rt, GSVector4(m_vt.m_min.c));
 
-	m_tc->InvalidateVideoMemType(GSTextureCache::DepthStencil, ctx->FRAME.Block());
+	// TODO m_tc->InvalidateVideoMemType(GSTextureCache::DepthStencil, ctx->FRAME.Block());
 	GL_INS("OI_SuperManReturns");
 
 	return false;

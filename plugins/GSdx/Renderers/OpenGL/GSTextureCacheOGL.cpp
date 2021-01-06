@@ -30,8 +30,14 @@ GSTextureCacheOGL::GSTextureCacheOGL(GSRenderer* r)
 
 void GSTextureCacheOGL::Read(Target* t, const GSVector4i& r)
 {
-	if (!t->m_dirty.empty() || r.width() == 0 || r.height() == 0)
+	const int w = r.width();
+	const int h = r.height();
+
+	if (w <= 0 || h <= 0)
+	{
+		ASSERT(false);
 		return;
+	}
 
 	const GIFRegTEX0& TEX0 = t->m_TEX0;
 
@@ -64,6 +70,7 @@ void GSTextureCacheOGL::Read(Target* t, const GSVector4i& r)
 			break;
 
 		default:
+			ASSERT(false);
 			return;
 	}
 
@@ -76,16 +83,16 @@ void GSTextureCacheOGL::Read(Target* t, const GSVector4i& r)
 
 	GSVector4 src = GSVector4(r) * GSVector4(t->m_texture->GetScale()).xyxy() / GSVector4(t->m_texture->GetSize()).xyxy();
 
-	if(GSTexture* offscreen = m_renderer->m_dev->CopyOffscreen(t->m_texture, src, r.width(), r.height(), fmt, ps_shader))
+	if(GSTexture* offscreen = m_renderer->m_dev->CopyOffscreen(t->m_texture, src, w, h, fmt, ps_shader))
 	{
 		GSTexture::GSMap m;
-		GSVector4i r_offscreen(0, 0, r.width(), r.height());
+		GSVector4i r_offscreen(0, 0, w, h);
 
 		if(offscreen->Map(m, &r_offscreen))
 		{
 			// TODO: block level write
 
-			GSOffset* off = m_renderer->m_mem.GetOffset(TEX0.TBP0, TEX0.TBW, TEX0.PSM);
+			GSOffset* off = t->m_off;
 
 			switch(TEX0.PSM)
 			{
@@ -113,6 +120,10 @@ void GSTextureCacheOGL::Read(Target* t, const GSVector4i& r)
 
 		// FIXME invalidate data
 		m_renderer->m_dev->Recycle(offscreen);
+	}
+	else
+	{
+		ASSERT(false);
 	}
 }
 

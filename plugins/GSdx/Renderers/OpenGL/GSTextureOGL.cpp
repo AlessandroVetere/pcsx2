@@ -359,7 +359,7 @@ void GSTextureOGL::Clear(const void* data, const GSVector4i& area)
 
 bool GSTextureOGL::Update(const GSVector4i& r, const void* data, int pitch, int layer)
 {
-	ASSERT(m_type != GSTexture::DepthStencil && m_type != GSTexture::Offscreen);
+	// ASSERT(m_type != GSTexture::DepthStencil && m_type != GSTexture::Offscreen);
 
 	if (layer >= m_max_layer)
 		return true;

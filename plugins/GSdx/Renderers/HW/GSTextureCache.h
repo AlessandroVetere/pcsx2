@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include <iomanip>
+#include <limits>
+
 #include "Renderers/Common/GSRenderer.h"
 #include "Renderers/Common/GSFastList.h"
 #include "Renderers/Common/GSDirtyRect.h"
@@ -28,7 +31,13 @@
 class GSTextureCache
 {
 public:
-	enum {RenderTarget, DepthStencil};
+	enum struct SurfaceType
+	{
+		Invalid = -1,
+		Source = 0,
+		RenderTarget = 1,
+		DepthStencil = 2
+	};
 
 	class Surface : public GSAlignedClass<32>
 	{
@@ -36,22 +45,38 @@ public:
 		GSRenderer* m_renderer;
 
 	public:
+		struct { GSVector4i* rect; uint32 count; } m_write;
 		GSTexture* m_texture;
 		GIFRegTEX0 m_TEX0;
 		GIFRegTEXA m_TEXA;
-		int m_age;
 		uint8* m_temp;
-		bool m_32_bits_fmt; // Allow to detect the casting of 32 bits as 16 bits texture
-		bool m_shared_texture;
 		uint32 m_end_block;  // Hint of the surface area.
+		uint32* m_pages_as_bit;
+		GSOffset* m_off;
+		GSVector4i m_rect;  // Hint of the surface rect.
+		uint32 m_pages_count;
+		uint32 m_valid[MAX_PAGES]; // each uint32 bits map to the 32 blocks of that page
+		std::unordered_set<uint32> m_dirty_pages;
+		bool m_repeating;
+		std::vector<GSVector2i>* m_p2t;
+		SurfaceType m_type;
+		GSTexture* m_palette;
+		GIFRegTEX0 m_layer_TEX0[7]; // Detect already loaded value
+		int m_upscale_multiplier;
 
-	public:
-		Surface(GSRenderer* r, uint8* temp);
-		virtual ~Surface();
+		Surface(GSRenderer* r, uint8* temp, const GIFRegTEX0& TEX0, const SurfaceType type);
+		~Surface();
 
-		void UpdateAge();
-		bool Inside(uint32 bp, uint32 bw, uint32 psm, const GSVector4i& rect);
-		bool Overlaps(uint32 bp, uint32 bw, uint32 psm, const GSVector4i& rect);
+		bool Inside(const uint32 bp, const uint32 bw, const uint32 psm, const GSVector4i& rect);
+		bool Overlaps(const uint32 bp, const uint32 bw, const uint32 psm, const GSVector4i& rect);
+		bool FullyDirty() const;
+		void SetDirtyPage(const uint32 p);
+		uint32* GetPages();
+		uint32 GetBlockPointerPage() const;
+		void Write(const GSVector4i& r, const int layer);
+		void Flush(const uint32 count, const int layer);
+		bool IsDirtyPage(const uint32 p) const;
+		bool IsComplete() const;
 	};
 
 	struct PaletteKey {
@@ -68,7 +93,7 @@ public:
 		const GSRenderer* m_renderer;
 
 	public:
-		Palette(const GSRenderer* renderer, uint16 pal, bool need_gs_texture);
+		Palette(const GSRenderer* renderer, const uint16 pal, const bool need_gs_texture);
 		~Palette();
 
 		// Disable copy constructor and copy operator
@@ -79,10 +104,8 @@ public:
 		Palette(const Palette&&) = delete;
 		Palette& operator=(const Palette&&) = delete;
 
-		GSTexture* GetPaletteGSTexture();
-
-		PaletteKey GetPaletteKey();
-
+		GSTexture* GetPaletteGSTexture() const;
+		PaletteKey GetPaletteKey() const;
 		void InitializeTexture();
 	};
 
@@ -98,56 +121,21 @@ public:
 
 	class Source : public Surface
 	{
-		struct {GSVector4i* rect; uint32 count;} m_write;
-
-		void Write(const GSVector4i& r, int layer);
-		void Flush(uint32 count, int layer);
-
 	public:
 		std::shared_ptr<Palette> m_palette_obj;
-		GSTexture* m_palette;
-		uint32 m_valid[MAX_PAGES]; // each uint32 bits map to the 32 blocks of that page
-		GSVector4i m_valid_rect;
-		bool m_target;
-		bool m_complete;
-		bool m_repeating;
-		std::vector<GSVector2i>* m_p2t;
-		// Keep a trace of the target origin. There is no guarantee that pointer will
-		// still be valid on future. However it ought to be good when the source is created
-		// so it can be used to access un-converted data for the current draw call.
-		GSTexture* m_from_target;
-		GIFRegTEX0 m_from_target_TEX0;  // TEX0 of the target texture, if any, else equal to texture TEX0
-		GIFRegTEX0 m_layer_TEX0[7]; // Detect already loaded value
-		// Keep a GSTextureCache::SourceMap::m_map iterator to allow fast erase
-		std::array<uint16, MAX_PAGES> m_erase_it;
-		uint32* m_pages_as_bit;
+		std::array<uint16, MAX_PAGES> m_erase_it;  // Keep a GSTextureCache::SourceMap::m_map iterator to allow fast erase.
 
-	public:
-		Source(GSRenderer* r, const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, uint8* temp, bool dummy_container = false);
-		virtual ~Source();
+		Source(GSRenderer* r, const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, uint8* temp);
 
-		void Update(const GSVector4i& rect, int layer = 0);
-		void UpdateLayer(const GIFRegTEX0& TEX0, const GSVector4i& rect, int layer = 0);
-
-		bool ClutMatch(PaletteKey palette_key);
+		bool ClutMatch(const PaletteKey& palette_key) const;
 	};
 
 	class Target : public Surface
 	{
 	public:
-		int m_type;
-		bool m_used;
-		GSDirtyRectList m_dirty;
-		GSVector4i m_valid;
-		bool m_depth_supported;
-		bool m_dirty_alpha;
+		Target(GSRenderer* r, const GIFRegTEX0& TEX0, uint8* temp, const SurfaceType type);
 
-	public:
-		Target(GSRenderer* r, const GIFRegTEX0& TEX0, uint8* temp, bool depth_supported);
-
-		void UpdateValidity(const GSVector4i& rect);
-
-		void Update();
+		void Extend(const GIFRegTEX0& TEX0);
 	};
 
 	class PaletteMap
@@ -165,7 +153,7 @@ public:
 		PaletteMap(const GSRenderer* renderer);
 
 		// Retrieves a shared pointer to a valid Palette from m_maps or creates a new one adding it to the data structure
-		std::shared_ptr<Palette> LookupPalette(uint16 pal, bool need_gs_texture);
+		std::shared_ptr<Palette> LookupPalette(const uint16 pal, const bool need_gs_texture);
 
 		void Clear(); // Clears m_maps, thus deletes Palette objects
 	};
@@ -180,9 +168,8 @@ public:
 
 		SourceMap() : m_used(false) {memset(m_pages, 0, sizeof(m_pages));}
 
-		void Add(Source* s, const GIFRegTEX0& TEX0, GSOffset* off);
+		void Add(Source* s, const GIFRegTEX0& TEX0, const GSOffset* off);
 		void RemoveAll();
-		void RemovePartial();
 		void RemoveAt(Source* s);
 	};
 
@@ -199,11 +186,49 @@ public:
 		int y_offset;
 	};
 
+	enum struct PageState
+	{
+		CPU = 0,
+		GPU = 1,
+	};
+
+	struct PageInfo
+	{
+		PageState state;
+		// FastList<Source*> copies;  (Access from TC via m_src.m_map[p] instead).
+		Target* fb;
+
+		PageInfo() noexcept
+			: state(PageState::CPU)
+			, fb(nullptr)
+		{
+		}
+
+		bool is_sync() const noexcept
+		{
+			return state == PageState::CPU && fb;
+		}
+
+		std::string to_string() const
+		{
+			std::stringstream ss;
+			ss << "State: " << (state == PageState::CPU ? "CPU" : "GPU") << ", ";
+			ss << "Sync: " << (is_sync() ? "YES" : "NO");
+			if (fb)
+			{
+				ss << ", ";
+				ss << "FbAddr: 0x" << std::hex << std::setw(8) << std::setfill('0') << fb << std::dec << ", ";
+				ss << "FbTexID: " << (fb->m_texture ? fb->m_texture->GetID() : -1);
+			}
+			return ss.str();
+		}
+	};
+
 protected:
 	GSRenderer* m_renderer;
 	PaletteMap m_palette_map;
 	SourceMap m_src;
-	FastList<Target*> m_dst[2];
+	std::unordered_set<Target*> m_dst;
 	bool m_paltex;
 	bool m_preload_frame;
 	uint8* m_temp;
@@ -215,9 +240,7 @@ protected:
 	static bool m_wrap_gs_mem;
 	uint8 m_texture_inside_rt_cache_size = 255;
 	std::vector<TexInsideRtCacheEntry> m_texture_inside_rt_cache;
-
-	virtual Source* CreateSource(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, Target* t = NULL, bool half_right = false, int x_offset = 0, int y_offset = 0);
-	virtual Target* CreateTarget(const GIFRegTEX0& TEX0, int w, int h, int type);
+	std::array<PageInfo, MAX_PAGES> m_pages;
 
 	virtual int Get8bitFormat() = 0;
 
@@ -227,33 +250,31 @@ protected:
 public:
 	GSTextureCache(GSRenderer* r);
 	virtual ~GSTextureCache();
+
 	virtual void Read(Target* t, const GSVector4i& r) = 0;
 	virtual void Read(Source* t, const GSVector4i& r) = 0;
 	void RemoveAll();
-	void RemovePartial();
 
 	Source* LookupSource(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const GSVector4i& r);
-	Source* LookupDepthSource(const GIFRegTEX0& TEX0, const GIFRegTEXA& TEXA, const GSVector4i& r, bool palette = false);
+	Target* LookupTarget(const GIFRegTEX0& TEX0, const SurfaceType type);
 
-	Target* LookupTarget(const GIFRegTEX0& TEX0, int w, int h, int type, bool used, uint32 fbmask = 0);
-	Target* LookupTarget(const GIFRegTEX0& TEX0, int w, int h, int real_h);
+	void InvalidateVideoMem(const GSOffset* off, const GSVector4i& r, Target* fb);
+	void InvalidateLocalMem(const GSOffset* off, const GSVector4i& r);
 
-	void InvalidateVideoMemType(int type, uint32 bp);
-	void InvalidateVideoMemSubTarget(GSTextureCache::Target* rt);
-	void InvalidateVideoMem(GSOffset* off, const GSVector4i& r, bool target = true);
-	void InvalidateLocalMem(GSOffset* off, const GSVector4i& r);
+	void UpdateSurfacePage(Surface* s, const Surface* t, const uint32 p, bool& out_result);  // dst is the source of the copy.
+	void UpdateSurface(Surface* s, const GSVector4i& rect, const int layer = 0);
+	void UpdateSurfaceLayer(Surface* s, const GIFRegTEX0& TEX0, const GSVector4i& rect, const int layer = 0);
 
-	void IncAge();
 	bool UserHacks_HalfPixelOffset;
 	void ScaleTexture(GSTexture* texture);
 
 	bool ShallSearchTextureInsideRt();
 
-	const char* to_string(int type) {
-		return (type == DepthStencil) ? "Depth" : "Color";
+	const char* to_string(const SurfaceType type) noexcept {
+		return (type == SurfaceType::DepthStencil) ? "Depth" : "Color";
 	}
 
 	void PrintMemoryUsage();
 
-	void AttachPaletteToSource(Source* s, uint16 pal, bool need_gs_texture);
+	void AttachPaletteToSource(Source* s, const uint16 pal, const bool need_gs_texture);
 };
